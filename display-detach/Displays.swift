@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -90,9 +91,31 @@ func off(_ uuids: [String]) throws -> [DisplayInfo] {
     return targets
 }
 
+/// A disabled display drops out of the online list, so `on` also resolves
+/// UUIDs through CoreGraphics' own UUID table, which still knows the ID.
+func resolveForEnable(_ uuids: [String], in displays: [DisplayInfo]) throws -> [DisplayInfo] {
+    try uuids.map { wanted in
+        if let d = displays.first(where: { $0.uuid.caseInsensitiveCompare(wanted) == .orderedSame }) {
+            guard !d.builtin else { throw DetachError.builtin(wanted) }
+            return d
+        }
+        // A bare number is taken as a raw CGDirectDisplayID (see `list`),
+        // for displays macOS no longer maps by UUID after a disable.
+        if let raw = UInt32(wanted) {
+            return DisplayInfo(id: raw, uuid: "id:\(raw)", name: "(disabled)", active: false, builtin: false)
+        }
+        guard let cfuuid = CFUUIDCreateFromString(nil, wanted as CFString) else {
+            throw DetachError.unknownDisplay(wanted)
+        }
+        let id = CGDisplayGetDisplayIDFromUUID(cfuuid)
+        guard id != 0 else { throw DetachError.unknownDisplay(wanted) }
+        return DisplayInfo(id: id, uuid: wanted.uppercased(), name: "(disabled)", active: false, builtin: false)
+    }
+}
+
 func on(_ uuids: [String]) throws {
     let all = try inventory()
-    let targets = try resolve(uuids, in: all)
+    let targets = try resolveForEnable(uuids, in: all)
     try setEnabled(targets, true)
     for d in targets { print("on   id=\(d.id)  \(d.uuid)  \(d.name)") }
 }
