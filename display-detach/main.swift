@@ -36,12 +36,15 @@ func run() throws {
             args.removeSubrange(i...(i + 1))
         }
         guard !args.isEmpty else { throw DetachError.usage }
+        let all = try inventory()
+        let layout = captureLayout(try resolve(args, in: all))
         let disabled = try off(args)
         Thread.sleep(forTimeInterval: hold)
         // Re-enable by numeric ID no matter what happened during the hold, so
         // the Mac keeps outputting a signal for the monitors to return to later.
         try setEnabled(disabled, true)
         for d in disabled { print("on   id=\(d.id)  \(d.uuid)  \(d.name)") }
+        restoreLayout(layout)
     default:
         throw DetachError.usage
     }
