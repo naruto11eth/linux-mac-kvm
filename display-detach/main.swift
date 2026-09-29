@@ -6,6 +6,7 @@
 // a logout or reboot restores every display regardless of what this tool did.
 
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -22,6 +23,13 @@ func run() throws {
     switch command {
     case "list":
         try list()
+    case "windows":
+        // Diagnostic: shows whether Accessibility is granted and what would be saved.
+        let live = liveWindows()
+        for w in live {
+            print("\(w.app.localizedName ?? "?") [\(w.record.title ?? "")]: \(Int(w.record.x)),\(Int(w.record.y)) \(Int(w.record.width))x\(Int(w.record.height))")
+        }
+        print("\(live.count) window(s); accessibility trusted: \(AXIsProcessTrusted()); snapshot file: \(snapshotURL.path)")
     case "off":
         guard !args.isEmpty else { throw DetachError.usage }
         try off(args)
@@ -38,6 +46,7 @@ func run() throws {
         guard !args.isEmpty else { throw DetachError.usage }
         let all = try inventory()
         let layout = captureLayout(try resolve(args, in: all))
+        saveWindowSnapshot()
         let disabled = try off(args)
         Thread.sleep(forTimeInterval: hold)
         // Re-enable by numeric ID no matter what happened during the hold, so
@@ -45,6 +54,13 @@ func run() throws {
         try setEnabled(disabled, true)
         for d in disabled { print("on   id=\(d.id)  \(d.uuid)  \(d.name)") }
         restoreLayout(layout)
+        // Windows are deliberately left where macOS moved them (the MacBook
+        // screen) so they are usable while the monitors show Linux.
+        // `restore-windows` puts them back once the monitors are physically back.
+    case "save-windows":
+        saveWindowSnapshot()
+    case "restore-windows":
+        try restoreWindowSnapshot()
     default:
         throw DetachError.usage
     }

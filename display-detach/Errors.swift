@@ -24,6 +24,9 @@ enum DetachError: Error, CustomStringConvertible {
             return """
             usage:
               display-detach list
+              display-detach windows                              (diagnostic)
+              display-detach save-windows                         (snapshot only, no switch)
+              display-detach restore-windows                      (move saved windows back)
               display-detach off <uuid>...
               display-detach on  <uuid>...
               display-detach switch [--hold SECONDS] <uuid>...   (off, wait, on)
