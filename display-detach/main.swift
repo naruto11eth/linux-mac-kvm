@@ -45,8 +45,11 @@ func run() throws {
         }
         guard !args.isEmpty else { throw DetachError.usage }
         let all = try inventory()
-        let layout = captureLayout(try resolve(args, in: all))
-        let records = saveWindowSnapshot()
+        let targets = try resolve(args, in: all)
+        // Every display's mode and origin: disabling two monitors can shift the
+        // others' positions in the global arrangement as well.
+        let layout = captureLayout(all.filter { $0.active })
+        let records = saveWindowSnapshot(onDisplays: targets.map { $0.id })
         let disabled = try off(args)
         Thread.sleep(forTimeInterval: hold)
         // Re-enable by numeric ID no matter what happened during the hold, so

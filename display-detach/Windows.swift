@@ -91,15 +91,20 @@ func liveWindows() -> [(app: NSRunningApplication, element: AXUIElement, record:
     return out
 }
 
-/// Saves every visible window's frame. Needs the Accessibility permission;
-/// without it this saves nothing and warns once.
+/// Saves the windows that live on `displays` (all displays when nil), so a
+/// later restore never touches windows on screens that were not switched.
+/// Needs the Accessibility permission; without it this saves nothing and warns.
 @discardableResult
-func saveWindowSnapshot() -> [WindowRecord] {
+func saveWindowSnapshot(onDisplays displays: [CGDirectDisplayID]? = nil) -> [WindowRecord] {
     guard AXIsProcessTrusted() else {
         warn("no Accessibility permission; window positions will not be saved")
         return []
     }
-    let records = liveWindows().map { $0.record }
+    let records = liveWindows().map { $0.record }.filter { record in
+        guard let displays else { return true }
+        let center = CGPoint(x: record.x + record.width / 2, y: record.y + record.height / 2)
+        return displays.contains { CGDisplayBounds($0).contains(center) }
+    }
     do {
         let data = try JSONEncoder().encode(records)
         try data.write(to: snapshotURL, options: .atomic)
