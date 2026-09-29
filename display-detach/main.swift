@@ -46,7 +46,7 @@ func run() throws {
         guard !args.isEmpty else { throw DetachError.usage }
         let all = try inventory()
         let layout = captureLayout(try resolve(args, in: all))
-        saveWindowSnapshot()
+        let records = saveWindowSnapshot()
         let disabled = try off(args)
         Thread.sleep(forTimeInterval: hold)
         // Re-enable by numeric ID no matter what happened during the hold, so
@@ -54,9 +54,11 @@ func run() throws {
         try setEnabled(disabled, true)
         for d in disabled { print("on   id=\(d.id)  \(d.uuid)  \(d.name)") }
         restoreLayout(layout)
-        // Windows are deliberately left where macOS moved them (the MacBook
-        // screen) so they are usable while the monitors show Linux.
-        // `restore-windows` puts them back once the monitors are physically back.
+        // Park the monitors' windows on the MacBook screen so they are usable
+        // while the monitors show Linux. `restore-windows` undoes this once the
+        // monitors are physically back.
+        Thread.sleep(forTimeInterval: 1.0)
+        parkWindows(records, from: disabled.map { $0.id })
     case "save-windows":
         saveWindowSnapshot()
     case "restore-windows":

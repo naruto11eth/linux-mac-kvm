@@ -136,6 +136,34 @@ func place(_ element: AXUIElement, at position: CGPoint, size: CGSize) -> Bool {
     return axSet(element, kAXPositionAttribute, point: position)
 }
 
+/// Moves every saved window that lived on one of `displays` onto the built-in
+/// screen, keeping its relative placement and shrinking it to fit. macOS does
+/// this itself only if the display stays away long enough; with a short hold it
+/// puts windows straight back on the (now invisible) monitors.
+func parkWindows(_ records: [WindowRecord], from displays: [CGDirectDisplayID]) {
+    guard AXIsProcessTrusted(), !records.isEmpty else { return }
+    let builtinID = (try? displayIDs(CGGetActiveDisplayList))?.first { CGDisplayIsBuiltin($0) != 0 }
+    guard let target = builtinID else { warn("no built-in display to park windows on"); return }
+    let dest = CGDisplayBounds(target)
+    let menuBar: CGFloat = 25
+    var live = liveWindows()
+    var parked = 0
+    for record in records {
+        let center = CGPoint(x: record.x + record.width / 2, y: record.y + record.height / 2)
+        guard let source = displays.first(where: { CGDisplayBounds($0).contains(center) }) else { continue }
+        guard let match = takeMatch(for: record, from: &live) else { continue }
+        let src = CGDisplayBounds(source)
+        let size = CGSize(width: min(record.width, dest.width), height: min(record.height, dest.height - menuBar))
+        let relX = (record.x - src.minX) / src.width * dest.width
+        let relY = (record.y - src.minY) / src.height * dest.height
+        let position = CGPoint(
+            x: dest.minX + max(0, min(relX, dest.width - size.width)),
+            y: dest.minY + max(menuBar, min(relY, dest.height - size.height)))
+        if place(match.element, at: position, size: size) { parked += 1 }
+    }
+    print("parked \(parked) window(s) on the built-in display")
+}
+
 /// Moves saved windows back to their recorded frames. Only touches a window
 /// whose recorded frame sits on a display that is active right now, so nothing
 /// is ever pushed off-screen.
