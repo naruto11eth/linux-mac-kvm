@@ -217,3 +217,85 @@ display-switch mac                 # T32 -> Mac
 | Sceptre T32 | 4 | `display 3` | `0x0f` / 15 | `0x11` / 17 | **yes** |
 | Sceptre P30 | 6 | `display 2` | — | — | **no (firmware)** |
 | Samsung C27F390 | — | `display 4` | — | — | unknown |
+
+---
+
+## 9. Mac-side findings and Linux follow-up (written on the Mac, 2026-09-28)
+
+### DDC from the Mac is a dead end — for both Sceptres
+- **The T32's HDMI-to-USB-C adapter does not pass DDC/CI.** Every `m1ddc get` returns
+  the VCP opcode itself as the "value": input `0x60` -> 96, luminance `0x10` -> 16,
+  contrast `0x12` -> 18, volume `0x62` -> 98. The adapter echoes the request.
+  `m1ddc display 3 set input 15` and `set input 17` both returned exit 0 and did
+  nothing. **Section 5, trap 3 is wrong**: the adapter *is* the problem. The "96"
+  read was never real communication.
+- **The P30's adapter fails hard** (`DDC communication failure`) even while the P30
+  is actively displaying the Mac, so that test in section 4 also reflects the adapter,
+  not only the panel.
+- BetterDisplay is installed on the Mac; it uses the same DDC path, so it cannot help.
+
+### What works instead: signal-drop auto-detect (both monitors, both directions)
+Both Sceptres hunt for a live input when their current one disappears, even though
+the P30's OSD exposes no auto-source option. Verified by the user:
+
+| Direction | Command that triggers it | Result |
+|---|---|---|
+| To Linux | Mac: `pmset displaysleepnow` | P30 **and** T32 moved to Linux |
+| To Mac | Linux: `busctl --user set-property org.gnome.Mutter.DisplayConfig /org/gnome/Mutter/DisplayConfig org.gnome.Mutter.DisplayConfig PowerSaveMode i 1` | P30 **and** T32 moved to Mac |
+
+Key facts:
+- The machine that gave up the monitors must **wake itself afterwards** and keep
+  outputting. The Mac still lists both Sceptres as online while they show Linux, so
+  a later Linux signal-drop finds the Mac. The same must hold in reverse.
+- The Acer (Linux-only) and Samsung (Mac-only) just blank and return.
+- Monitors need several seconds of no-signal before they scan. The Mac holds for 10 s.
+
+### Mac side (done) — UPDATED: per-display detach, no more display sleep
+The Mac no longer sleeps its displays. `display-detach/` (this repo, Swift, built
+with `./build.sh`) disables just the P30 and T32 via the private
+`CGSConfigureDisplayEnabled` call, holds 3 s, re-enables them by numeric id. (3 s
+is enough: the Sceptres take ~8 s on their own to notice and switch; the hold only
+has to avoid interrupting that. Try 3 s on the Linux side too instead of 10.) The
+MacBook screen stays on, so the MDM lock never fires. Verified 2026-09-28 14:25:
+both Sceptres moved to Linux, Mac re-listed both afterwards. The Raycast script
+calls it and falls back to `pmset displaysleepnow` if the tool errors. It also restores the Sceptres' display mode/arrangement after re-enabling. Windows
+are saved, then left on the MacBook screen (usable while the monitors show Linux);
+a second Mac hotkey, **Ctrl+Shift+M = "Windows Back to Monitors"**, moves them home
+after the monitors physically return. So the Mac's Ctrl+Shift+M is *not* a signal
+switch; the return trip is still triggered from Linux. Read
+`display-detach/README.md` before touching it. The paragraph below describes the
+original sleep-based version, kept as `display-detach/displays-to-linux.sleep-fallback.sh`.
+
+`~/raycast-scripts/displays-to-linux.sh` (Raycast script command): `pmset displaysleepnow; sleep 10;
+caffeinate -u -t 2`. Bound in Raycast to **Ctrl+Shift+L**. **Verified end to end 2026-09-28**: both
+Sceptres moved to Linux, Mac self-woke after 10 s. Each run appends a line to
+`~/Library/Logs/display-switch.log`. The Mac locks on every run because its
+lock-after-display-off policy is MDM-enforced (work Mac); accepted for now. There is deliberately no
+Mac-side "bring to Mac" hotkey: the Mac cannot make Linux drop its signal without
+SSH, which the user declined. The return trip is triggered from the Linux keyboard.
+
+### YOUR TASK on Linux
+1. Create `~/.local/bin/displays-to-mac`:
+   ```bash
+   #!/bin/bash
+   set -euo pipefail
+   DC=org.gnome.Mutter.DisplayConfig
+   busctl --user set-property $DC /org/gnome/Mutter/DisplayConfig $DC PowerSaveMode i 1
+   sleep 3   # 10 was the first guess; 3 s proved enough on the Mac, verify here
+   busctl --user set-property $DC /org/gnome/Mutter/DisplayConfig $DC PowerSaveMode i 0
+   ```
+   Verify the second call actually re-lights the Acer without user input. **Observed
+   2026-09-28:** when the user ran only the `PowerSaveMode i 1` call by hand, both
+   Sceptres moved to the Mac as intended, but the Acer stayed dark until a key was
+   pressed on the Linux keyboard. The wake step is therefore mandatory, not optional. If mutter
+   ignores `PowerSaveMode 0` while idle, fall back to synthesizing input (e.g. `ydotool`
+   or `wtype`), and confirm Linux keeps outputting on DP-1/DP-2 while the Sceptres
+   show the Mac.
+2. Bind it to **Ctrl+Shift+M** in GNOME keyboard shortcuts, mirroring the Mac's
+   Ctrl+Shift+L (Ctrl and Shift are the same physical keys on both machines). Ask before overriding anything.
+3. Leave `display-switch` and its `Super+Alt+M/P` bindings in place. The DDC path
+   still works for the T32 from Linux and is a useful fallback; the new script is
+   the one that also moves the P30.
+4. Check whether GNOME's "lock screen after blank" fires on this brief blank and
+   relax it if it does. The Mac has the same issue with its lock-after-display-off
+   setting.
