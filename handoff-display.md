@@ -129,8 +129,9 @@ video through it.
 2. **A monitor showing another input may be deaf to DDC.** Before concluding a panel
    is broken, confirm which input it is displaying. The P30 is deaf off-input; the
    T32 is not. This differs per monitor.
-3. **The HDMI-to-USB-C adapters are NOT a problem.** The T32 answers through one.
-   Any DDC failure is the monitor, not the adapter.
+3. ~~**The HDMI-to-USB-C adapters are NOT a problem.** The T32 answers through one.
+   Any DDC failure is the monitor, not the adapter.~~ **RETRACTED (see sections 9 and 10):**
+   the adapters do not pass DDC at all. The T32's "96" was the adapter echoing the opcode.
 4. **Never trust a capabilities string.** The T32's is actively wrong. Determine
    accepted values by writing and observing, not by reading.
 5. **Read-back is not proof of success on the T32** — its reported values are junk.
@@ -275,6 +276,11 @@ Mac-side "bring to Mac" hotkey: the Mac cannot make Linux drop its signal withou
 SSH, which the user declined. The return trip is triggered from the Linux keyboard.
 
 ### YOUR TASK on Linux
+
+> **SUPERSEDED, see section 10.** This was done on Linux, but not as written here.
+> `PowerSaveMode` is a global DPMS switch and it blanked the Acer, which must never
+> sleep. Linux disables only DP-1/DP-2 instead. Kept below for history.
+
 1. Create `~/.local/bin/displays-to-mac`:
    ```bash
    #!/bin/bash
@@ -299,3 +305,80 @@ SSH, which the user declined. The return trip is triggered from the Linux keyboa
 4. Check whether GNOME's "lock screen after blank" fires on this brief blank and
    relax it if it does. The Mac has the same issue with its lock-after-display-off
    setting.
+
+---
+
+## 10. Linux follow-up (written on Linux, 2026-09-28, updated 2026-09-29)
+
+### Section 9's correction is accepted
+The adapter-echo evidence is conclusive (`0x60`->96, `0x10`->16, `0x12`->18, `0x62`->98;
+every read returns the opcode in decimal). Section 5, trap 3 was wrong and is retracted:
+the HDMI-to-USB-C adapters don't pass DDC, and the "96" read from the T32 was never real
+communication.
+
+This doesn't change the P30 verdict. That came from Linux talking to the P30 directly
+over DisplayPort from the GPU, with no adapter in the path. There it communicates fine
+and simply discards `0x60` writes. The Mac-side P30 test is now uninformative rather than
+confirming, but the conclusion still holds on the Linux evidence.
+
+### Signal drop also confirmed from the Linux side
+This was checked through DDC readings rather than by looking at the screens. After a
+signal drop, the T32 reported `0x00` (its on-HDMI value) and the P30 stopped answering
+on DP, which means both had moved to the Mac. The Acer stayed on `0x11`. **Both Sceptres
+move, including the P30.**
+
+### Linux implementation: per-output, not `PowerSaveMode`. Don't "fix" it back
+Section 9 proposed `busctl ... PowerSaveMode i 1`. That was built first and **rejected
+in testing: `PowerSaveMode` is a global DPMS switch with no per-output control, so it
+also blanked the Acer.** The user's hard requirement is that the Acer never sleeps.
+
+Current tool: `~/.local/bin/displays-to-mac` (Python). It calls
+`org.gnome.Mutter.DisplayConfig.ApplyMonitorsConfig` to disable **only** `DP-1` and
+`DP-2`, waits, then reapplies the original layout. This is the same idea as the Mac's
+`display-detach`.
+- Gotcha: mutter rejects any layout whose top-left isn't `(0,0)`
+  (`InvalidArgs: Logical monitors positions are offset`). The Acer sits at `(369,0)`,
+  so positions have to be normalised after the monitors are dropped. This cost one
+  failed run.
+- The restore runs from a `finally` block plus SIGINT/SIGTERM/SIGHUP handlers. A plain
+  sequential script would leave the DP outputs dark for good if it died mid-hold.
+- It refuses to run if `HDMI-1` isn't connected, so it can never blank the last screen.
+- Hold is 10 s by default and can be overridden with `DISPLAYS_TO_MAC_HOLD`. The 3 s
+  that works on the Mac hasn't been tested on Linux yet. Linux's DP signal comes back
+  sooner than the monitors' ~8 s scan, so this needs checking here rather than assuming.
+- Verified: the layout comes back exactly (positions and primary preserved).
+- Bound to **Ctrl+Shift+M** (GNOME custom keybinding `custom4`).
+- Logs to `~/.local/state/display-switch.log`.
+- For now it lives only in `~/.local/bin`, not in this repo.
+
+Status of section 9's Linux task: items 1 and 2 are done, per the implementation above.
+Item 3 is done, with `display-switch` and `Super+Alt+M/P` kept as the DDC fallback for
+the T32. Item 4 turned out not to be an issue: `idle-delay` is `0` and `LockedHint`
+stayed `no` across runs, so the short blank never triggers the GNOME lock. No input
+synthesis was needed, because the outputs come back on their own.
+
+### Previously open: Mac must be awake. Probably fixed by `display-detach`
+Signal drop only works if the other machine is actively driving those outputs. With the
+old sleep-based Mac script, the user pressed Ctrl+Shift+M on Linux three times with no
+effect, then woke the Mac by hand, and after that it worked immediately.
+`display-detach` keeps the MacBook screen on, so the MDM lock-after-display-off
+shouldn't fire, and the Mac should keep driving the Sceptres after handing them over.
+**Expected to be fixed, but not yet confirmed from the Linux side.**
+
+### Still to do on Linux
+1. Test a 3 s hold, and make it the default if the Sceptres still switch reliably.
+2. Move the Linux tools (`displays-to-mac`, `display-switch` and its config) into this repo.
+3. Check what happens to Linux windows. mutter moves them onto the Acer while DP-1/DP-2
+   are off, and it hasn't been verified whether they return. The Mac handles this
+   explicitly (park, then restore with a second hotkey). Linux doesn't yet.
+
+### Hotkey map, both machines
+| Keys | Machine | Effect |
+|---|---|---|
+| `Ctrl+Shift+M` | Linux | Both Sceptres -> Mac (disables DP-1/DP-2; the Acer isn't touched) |
+| `Ctrl+Shift+L` | Mac | Both Sceptres -> Linux (`display-detach switch`, `pmset` fallback) |
+| `Ctrl+Shift+M` | Mac | Windows Back to Monitors (`restore-windows`). **Not** a signal switch |
+| `Super+Alt+M` / `Super+Alt+P` | Linux | T32 only, via DDC. Kept as a fallback |
+
+`Ctrl+Shift+M` does different things on each machine. They're separate keyboards, so
+nothing collides, but keep it in mind if a shared keyboard is ever added.
